@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.ma as ma
 import pytest
 from hypothesis import given, settings
 from numpy.testing import assert_array_equal
@@ -16,6 +17,7 @@ from polars.testing.parametric import series
 
 if TYPE_CHECKING:
     import numpy.typing as npt
+    from numpy.ma import MaskedArray
 
     from polars._typing import PolarsDataType
 
@@ -487,3 +489,11 @@ def test_to_numpy_series_indexed_18986() -> None:
     assert (
         df.to_numpy()[2] == np.array([None])
     ).all()  # this one is strange, but only option in numpy?
+
+
+def test_to_masked_numpy_array() -> None:
+    values = [1, 2, 3, 4]
+    s = pl.Series(values)
+    expected: MaskedArray[Any, Any] = ma.masked_array(np.array(values), [0, 0, 0, 0])  # type:ignore[no-untyped-call]
+    result = s.to_numpy(masked=True)
+    assert_array_equal(result, expected)
