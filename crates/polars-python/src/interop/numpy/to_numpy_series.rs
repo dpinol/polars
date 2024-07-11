@@ -23,8 +23,14 @@ impl PySeries {
     /// This method copies data only when necessary. Set `allow_copy` to raise an error if copy
     /// is required. Set `writable` to make sure the resulting array is writable, possibly requiring
     /// copying the data.
-    fn to_numpy(&self, py: Python<'_>, writable: bool, allow_copy: bool) -> PyResult<Py<PyAny>> {
-        series_to_numpy(py, &self.series.read(), writable, allow_copy)
+    fn to_numpy(
+        &self,
+        py: Python<'_>,
+        writable: bool,
+        allow_copy: bool,
+        masked: bool,
+    ) -> PyResult<Py<PyAny>> {
+        series_to_numpy(py, &self.series.read(), writable, allow_copy, masked)
     }
 
     /// Create a view of the data as a NumPy ndarray.
@@ -44,8 +50,9 @@ pub(super) fn series_to_numpy(
     s: &Series,
     writable: bool,
     allow_copy: bool,
+    masked: bool,
 ) -> PyResult<Py<PyAny>> {
-    if s.is_empty() {
+    if s.is_empty() && !masked {
         // Take this path to ensure a writable array.
         // This does not actually copy data for an empty Series.
         return Ok(series_to_numpy_with_copy(py, s, true));
@@ -59,18 +66,39 @@ pub(super) fn series_to_numpy(
             }
             arr = arr.call_method0(py, intern!(py, "copy"))?;
         }
-        return Ok(arr);
+        if masked {
+            let masked_arr = series_to_masked_series(py, arr, s)?;
+            return Ok(masked_arr);
+        } else {
+            return Ok(arr);
+        }
     }
-
     if !allow_copy {
         return Err(PyRuntimeError::new_err(
             "copy not allowed: cannot convert to a NumPy array without copying data",
         ));
     }
-
-    Ok(series_to_numpy_with_copy(py, s, writable))
+    if masked {
+        let arr = series_to_numpy_with_copy(py, s, writable);
+        let masked_arr = series_to_masked_series(py, arr, s)?;
+        Ok(masked_arr)
+    } else {
+        Ok(series_to_numpy_with_copy(py, s, writable))
+    }
 }
 
+/// Wraps an existing numpy array with the
+fn series_to_masked_series(py: Python, np_array: PyObject, s: &Series) -> PyResult<PyObject> {
+    let validity_buffer_array = series_validity_buffer_to_numpy(py, s);
+    Python::with_gil(|py| {
+        let masked_array_api = PyModule::import_bound(py, "numpy.ma")?;
+        let ma_constructor = masked_array_api.getattr("array")?;
+        let args = (np_array,);
+        let kwargs = vec![("mask", validity_buffer_array)].into_py_dict_bound(py);
+        let masked_array = ma_constructor.call(args, Some(&kwargs))?;
+        Ok(masked_array.into_py(py))
+    })
+}
 /// Create a NumPy view of the given Series.
 fn try_series_to_numpy_view(
     py: Python<'_>,
@@ -291,6 +319,24 @@ fn series_to_numpy_with_copy(py: Python<'_>, s: &Series, writable: bool) -> Py<P
     }
 }
 
+/// Produce a python array from the validity buffer of the series
+fn series_validity_buffer_to_numpy(py: Python, s: &Series) -> PyObject {
+    let validity_buf: Vec<u8> = s
+        .chunks()
+        .iter()
+        .flat_map(|x| {
+            let validity = x.validity();
+            match validity {
+                Some(mask) => mask.iter().collect(),
+                None => vec![false; x.len()],
+            }
+        })
+        .map(|x| x as u8)
+        .collect();
+
+    PyArray1::from_iter_bound(py, validity_buf).into_py(py)
+}
+
 /// Convert numeric types to f32 or f64 with NaN representing a null value.
 fn numeric_series_to_numpy<T, U>(py: Python<'_>, s: &Series) -> Py<PyAny>
 where
@@ -370,6 +416,9 @@ where
 }
 fn list_series_to_numpy(py: Python<'_>, s: &Series, writable: bool) -> Py<PyAny> {
     let ca = s.list().unwrap();
+    let s_inner = ca.get_inner();
+
+    let np_array_flat = series_to_numpy(py, &s_inner, writable, true, false).unwrap();
 
     let iter = ca.amortized_iter().map(|opt_s| match opt_s {
         None => py.None(),
