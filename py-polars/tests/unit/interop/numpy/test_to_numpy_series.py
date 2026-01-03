@@ -17,7 +17,6 @@ from polars.testing.parametric import series
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from numpy.ma import MaskedArray
 
     from polars._typing import PolarsDataType
 
@@ -493,21 +492,38 @@ def test_to_numpy_series_indexed_18986() -> None:
 
 def test_to_masked_numpy_array() -> None:
     values = [1, 2, 3, 4]
-    s = pl.Series(values)
-    expected: MaskedArray[Any, Any] = ma.masked_array(np.array(values), [0, 0, 0, 0])  # type:ignore[no-untyped-call]
+    s = pl.Series(values, dtype=pl.UInt8)
     result = s.to_numpy(masked=True)
-    assert_array_equal(result, expected)
+    expected = ma.masked_array(values, dtype=np.float32, mask=ma.nomask)
+    assert_ma_equal(result, expected)
 
-def test_optional_bool_array_to_masked() -> None: 
+
+def test_optional_bool_array_to_masked() -> None:
     values = [True, False, None, True]
     s = pl.Series(values)
     result = s.to_numpy(masked=True)
-    assert result.data.dtype == bool 
+    expected = ma.masked_array(values, dtype=np.bool_, mask=[False, False, True, False])
+    assert_ma_equal(result, expected)
+
 
 def test_optional_int_array_to_masked() -> None:
-    values = [1, 2, 3, 4]
-    s = pl.Series('a', values, pl.UInt8)
-    result = s.to_numpy()
-    print(result.dtype)
-    assert result.dtype == int
+    s = pl.Series("a", [1, 2, None], pl.UInt8)
+    result = s.to_numpy(masked=True)
+    expected = ma.masked_array([1, 2, 0], dtype=np.uint8, mask=[False, False, True])
+    assert_ma_equal(result, expected)
 
+
+def test_optional_obj_array_to_masked() -> None:
+    values = ["1", "2", None, "4"]
+    s = pl.Series("a", values, pl.Object)
+    result = s.to_numpy(masked=True)
+    expected = ma.masked_array(
+        values, dtype=np.object_, mask=[False, False, True, False]
+    )
+    assert_ma_equal(result, expected)
+
+
+def assert_ma_equal(actual: ma.MaskedArray, desired: ma.MaskedArray) -> None:
+    # assert_array_equal does not compare mask https://github.com/numpy/numpy/issues/30564
+    assert_array_equal(actual, desired)
+    assert actual.mask.tolist() == desired.mask.tolist()
