@@ -1,6 +1,6 @@
 use ndarray::IntoDimension;
 use numpy::npyffi::flags;
-use numpy::{Element, IntoPyArray, PyArray1};
+use numpy::{Element, IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use polars_core::prelude::*;
 use polars_core::utils::dtypes_to_supertype;
 use polars_core::with_match_physical_numeric_polars_type;
@@ -9,10 +9,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::{IntoPyObjectExt, intern};
 
-use super::to_numpy_series::series_to_numpy;
-use super::utils::{
-    create_borrowed_np_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype,
-};
+use super::to_numpy_series::{series_to_numpy};
+use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype};
 use crate::conversion::Wrap;
 use crate::dataframe::PyDataFrame;
 
@@ -25,8 +23,9 @@ impl PyDataFrame {
         order: Wrap<IndexOrder>,
         writable: bool,
         allow_copy: bool,
+        masked: bool,
     ) -> PyResult<Py<PyAny>> {
-        df_to_numpy(py, &self.df.read(), order.0, writable, allow_copy)
+        df_to_numpy(py, &self.df.read(), order.0, writable, allow_copy, masked)
     }
 }
 
@@ -36,11 +35,12 @@ pub(super) fn df_to_numpy(
     order: IndexOrder,
     writable: bool,
     allow_copy: bool,
+    masked: bool,
 ) -> PyResult<Py<PyAny>> {
     if df.shape_has_zero() {
         // Take this path to ensure a writable array.
         // This does not actually copy data for an empty DataFrame.
-        return df_to_numpy_with_copy(py, df, order, true);
+        return df_to_numpy_with_copy(py, df, order, true, masked);
     }
 
     if matches!(order, IndexOrder::Fortran) {
@@ -53,6 +53,10 @@ pub(super) fn df_to_numpy(
                 }
                 arr = arr.call_method0(py, intern!(py, "copy"))?;
             }
+            if masked {
+                let validity = df_validity_buffer_to_numpy(py, df);
+                return create_masked_array(arr, validity)
+            }
             return Ok(arr);
         }
     }
@@ -63,7 +67,7 @@ pub(super) fn df_to_numpy(
         ));
     }
 
-    df_to_numpy_with_copy(py, df, order, writable)
+    df_to_numpy_with_copy(py, df, order, writable, masked)
 }
 
 /// Create a NumPy view of the given DataFrame.
@@ -201,6 +205,27 @@ where
         )
     }
 }
+
+
+/// Produce a python array from the validity buffer of the dataframe.
+fn df_validity_buffer_to_numpy(py: Python, df: &DataFrame) -> Py<PyAny> {
+    let validity = PyArray2::<bool>::zeros(py, (df.width(), df.height()), false);
+    let val_slice = unsafe { validity.as_slice_mut().unwrap() };
+    for (col_idx, s) in df.iter().enumerate() {
+        if !s.has_nulls() {
+            continue;
+        }
+        for (row_idx, is_null) in s.is_null().iter().enumerate() {
+            if let Some(is_null) = is_null && is_null {
+                val_slice[row_idx * df.width() + col_idx] = true;
+            }
+        }
+    }
+    validity.into_py_any(py).unwrap()
+}
+
+
+
 /// Create a NumPy view of a Datetime or Duration DataFrame.
 fn temporal_df_to_numpy_view(py: Python<'_>, df: &DataFrame, owner: Py<PyAny>) -> Py<PyAny> {
     let s = df.columns().first().unwrap();
@@ -229,17 +254,19 @@ fn df_to_numpy_with_copy(
     df: &DataFrame,
     order: IndexOrder,
     writable: bool,
+    masked: bool,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(arr) = try_df_to_numpy_numeric_supertype(py, df, order) {
+    if let Some(arr) = try_df_to_numpy_numeric_supertype(py, df, order, masked) {
         Ok(arr)
     } else {
-        df_columns_to_numpy(py, df, order, writable)
+        df_columns_to_numpy(py, df, order, writable, masked)
     }
 }
 fn try_df_to_numpy_numeric_supertype(
     py: Python<'_>,
     df: &DataFrame,
     order: IndexOrder,
+    masked: bool,
 ) -> Option<Py<PyAny>> {
     let st = dtypes_to_supertype(df.columns().iter().map(|s| s.dtype())).ok()?;
 
@@ -257,9 +284,10 @@ fn df_columns_to_numpy(
     df: &DataFrame,
     order: IndexOrder,
     writable: bool,
+    masked: bool,
 ) -> PyResult<Py<PyAny>> {
     let np_arrays = df.columns().iter().map(|c| {
-        let mut arr = series_to_numpy(py, c.as_materialized_series(), writable, true, false).unwrap();
+        let mut arr = series_to_numpy(py, c.as_materialized_series(), writable, true, masked).unwrap();
 
         // Convert multidimensional arrays to 1D object arrays.
         let shape: Vec<usize> = arr

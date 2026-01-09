@@ -5,9 +5,11 @@ use ndarray::{Dim, Dimension};
 use numpy::npyffi::PyArrayObject;
 use numpy::{Element, PY_ARRAY_API, PyArrayDescr, PyArrayDescrMethods, ToNpyDims, npyffi};
 use polars_core::prelude::*;
-use pyo3::intern;
+use pyo3::{intern, IntoPyObjectExt};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
+use pyo3::types::{IntoPyDict};
+
 
 /// Create a NumPy ndarray view of the data.
 pub(super) unsafe fn create_borrowed_np_array<I>(
@@ -119,4 +121,17 @@ pub(super) fn polars_dtype_to_np_temporal_dtype<'py>(
         DataType::Duration(TimeUnit::Nanoseconds) => Timedelta::<units::Nanoseconds>::get_dtype(py),
         _ => panic!("only Datetime/Duration inputs supported, got {dtype}"),
     }
+}
+pub(super) fn create_masked_array(
+    np_array: Py<PyAny>,
+    validity_buffer_array: Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    Python::attach(|py| {
+        let masked_array_api = PyModule::import(py, "numpy.ma")?;
+        let ma_constructor = masked_array_api.getattr("array")?;
+        let args = (np_array,);
+        let kwargs = [("mask", validity_buffer_array)].into_py_dict(py).unwrap();
+        let masked_array = ma_constructor.call(args, Some(&kwargs))?;
+        masked_array.into_py_any(py)
+    })
 }

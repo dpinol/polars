@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pytest
+from numpy.testing import assert_array_equal
 
 import polars as pl
 from polars.testing.parametric import load_profile
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
     from types import ModuleType
     from typing import Any
+
+    from numpy import ma as ma
 
     FixtureRequest = Any
 
@@ -298,3 +301,9 @@ def time_func(func: Callable[[], Any], *, iterations: int = 3) -> float:
         times = [min(times)]
 
     return min(times)
+
+
+def assert_ma_equal(actual: ma.MaskedArray, desired: ma.MaskedArray) -> None:
+    # assert_array_equal does not compare mask https://github.com/numpy/numpy/issues/30564
+    assert_array_equal(actual, desired)
+    assert actual.mask.tolist() == desired.mask.tolist()

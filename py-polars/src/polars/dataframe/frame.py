@@ -1879,6 +1879,30 @@ class DataFrame:
         """
         return self.rows(named=True)
 
+    @overload
+    def to_numpy(
+        self,
+        *,
+        order: IndexOrder = ...,
+        writable: bool = ...,
+        allow_copy: bool = ...,
+        structured: bool = ...,
+        use_pyarrow: bool | None = ...,
+        masked: Literal[False] = False,
+    ) -> np.ndarray[Any, Any]: ...
+
+    @overload
+    def to_numpy(
+        self,
+        *,
+        order: IndexOrder = ...,
+        writable: bool = ...,
+        allow_copy: bool = ...,
+        structured: bool = ...,
+        use_pyarrow: bool | None = ...,
+        masked: Literal[True] = ...,
+    ) -> np.ma.MaskedArray[Any, Any]: ...
+
     def to_numpy(
         self,
         *,
@@ -1887,7 +1911,8 @@ class DataFrame:
         allow_copy: bool = True,
         structured: bool = False,
         use_pyarrow: bool | None = None,
-    ) -> np.ndarray[Any, Any]:
+        masked: bool = False,
+    ) -> np.ndarray[Any, Any] | np.ma.MaskedArray[Any, Any]:
         """
         Convert this DataFrame to a NumPy ndarray.
 
@@ -1920,6 +1945,9 @@ class DataFrame:
             Return a `structured array`_ with a data type that corresponds to the
             DataFrame schema. If set to `False` (default), a 2D ndarray is
             returned instead.
+        masked
+            Flag used to determine whether to produce a numpy masked array rather than a
+            a raw array. More info about numpy masked arrays `here <https://numpy.org/doc/stable/reference/maskedarray.generic.html>`_
 
             .. _structured array: https://numpy.org/doc/stable/user/basics.rec.html
 
@@ -2030,7 +2058,9 @@ class DataFrame:
                 out[c] = arrays[idx]
             return out
 
-        return self._df.to_numpy(order, writable=writable, allow_copy=allow_copy)
+        return self._df.to_numpy(
+            order, writable=writable, allow_copy=allow_copy, masked=masked
+        )
 
     @overload
     def to_jax(

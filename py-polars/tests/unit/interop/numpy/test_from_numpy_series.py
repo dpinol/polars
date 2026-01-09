@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import numpy as np
+import numpy.ma as ma
 import pytest
 from numpy.testing import assert_array_equal
 
@@ -58,6 +59,20 @@ def test_from_numpy_records() -> None:
     s = pl.Series("data", data)
     assert s.dtype == pl.Struct({"id": pl.Int64, "values": pl.List(pl.Int64)})
     assert len(s) == 3
+
+
+def test_from_numpy_mask() -> None:
+    arr_int = ma.MaskedArray([1, 2, 3], dtype=np.int64, mask=[True, False, False])
+    arr_float = ma.MaskedArray(
+        [1.1, 2.2, 3.3], dtype=np.float64, mask=[False, True, False]
+    )
+    arr_bool = ma.MaskedArray(
+        [False, True, False], dtype=np.bool_, mask=[False, False, True]
+    )
+
+    s = pl.Series(name="data", values=arr_int)
+    assert s.dtype == pl.Int64
+    assert s.to_list() == [pl.Null, 2, 3]
 
 
 @pytest.mark.parametrize(

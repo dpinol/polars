@@ -5,6 +5,7 @@ from decimal import Decimal as D
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.ma as ma
 import pytest
 from hypothesis import given
 from numpy.testing import assert_array_equal, assert_equal
@@ -12,6 +13,7 @@ from numpy.testing import assert_array_equal, assert_equal
 import polars as pl
 from polars.testing import assert_frame_equal
 from polars.testing.parametric import series
+from tests.unit.conftest import assert_ma_equal
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -33,7 +35,7 @@ def assert_zero_copy(s: pl.Series, arr: np.ndarray[Any, Any]) -> None:
     s=series(
         min_size=6,
         max_size=6,
-        allowed_dtypes=[pl.Datetime, pl.Duration],
+        allowed_dtypes=[pl.Datetime, pl.Duration, pl.UInt8, pl.Int64, pl.Float64],
         allow_null=False,
         allow_chunks=False,
     )
@@ -45,6 +47,31 @@ def test_df_to_numpy_zero_copy(s: pl.Series) -> None:
 
     assert_zero_copy(s, result)
     assert result.flags.writeable is False
+
+
+def test_df_to_masked_numpy_zero_copy() -> None:
+    df = pl.DataFrame({"a": [None, 1], "b": [2.5, None]})
+
+    result = df.to_numpy(masked=True)
+    assert_ma_equal(
+        result,
+        ma.MaskedArray(
+            [[0.0, 2.5], [1.0, 0.0]], [[True, False], [False, True]], np.float64
+        ),
+    )
+    assert_zero_copy(df["a"], result)
+
+
+def test_df_to_masked_numpy() -> None:
+    df = pl.DataFrame({"a": [1, pl.Null], "b": [pl.Null, "2"]})
+
+    result = df.to_numpy(masked=True)
+    assert_ma_equal(
+        result,
+        ma.MaskedArray(
+            [[1, 0], [None, "2"]], [[False, True], [True, False]], np.object_
+        ),
+    )
 
 
 @pytest.mark.parametrize(

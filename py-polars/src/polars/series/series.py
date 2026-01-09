@@ -4719,6 +4719,28 @@ class Series:
             )
         ).to_series()
 
+    @overload
+    def to_numpy(
+        self,
+        *,
+        writable: bool = ...,
+        allow_copy: bool = ...,
+        use_pyarrow: bool | None = ...,
+        zero_copy_only: bool | None = ...,
+        masked: Literal[False] = False,
+    ) -> np.ndarray[Any, Any]: ...
+
+    @overload
+    def to_numpy(
+        self,
+        *,
+        writable: bool = ...,
+        allow_copy: bool = ...,
+        use_pyarrow: bool | None = ...,
+        zero_copy_only: bool | None = ...,
+        masked: Literal[True] = True,
+    ) -> np.ma.MaskedArray[Any, Any]: ...
+
     def to_numpy(
         self,
         *,
