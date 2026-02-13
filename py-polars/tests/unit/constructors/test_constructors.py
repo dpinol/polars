@@ -104,7 +104,7 @@ def test_init_dict() -> None:
     assert df.shape == (0, 0)
 
     # Empty dictionary/values
-    df = pl.DataFrame({"a": [], "b": []})
+    df = pl.DataFrame({"a": [], "b": None})
     assert df.shape == (0, 2)
     assert df.schema == {"a": pl.Null, "b": pl.Null}
 
@@ -181,6 +181,11 @@ def test_init_dict() -> None:
         test = [{"field": {"sub_field": empty_val, "sub_field_2": 2}}]
         df = pl.DataFrame(test, schema={"field": pl.Object})
         assert df["field"][0] == test[0]["field"]
+
+
+def test_init_df() -> None:
+    df = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+    assert_frame_equal(pl.DataFrame(df), df)
 
 
 def test_error_string_dtypes() -> None:
