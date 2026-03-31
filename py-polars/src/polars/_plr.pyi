@@ -1,7 +1,7 @@
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, TypeAlias, overload
 
-from numpy.typing import NDArray
+import numpy as np
 
 from polars._typing import ArrowSchemaExportable
 from polars.io.iceberg._sink import IcebergSinkState
@@ -83,7 +83,8 @@ SetOperation: TypeAlias = Literal[
     "union", "difference", "intersection", "symmetric_difference"
 ]
 FloatFmt: TypeAlias = Literal["full", "mixed"]
-NDArray1D: TypeAlias = NDArray[Any]
+NDArray1D: TypeAlias = np.ndarray[tuple[int], np.dtype[np.generic]]
+NDArray2D: TypeAlias = np.ndarray[tuple[int, int], np.dtype[np.generic]]
 StatisticsOptions: TypeAlias = Any
 EngineType: TypeAlias = Literal["auto", "in-memory", "streaming", "gpu"]
 PyScanOptions: TypeAlias = Any
@@ -582,7 +583,7 @@ class PySeries:
     def scatter(self, idx: PySeries, values: PySeries) -> None: ...
 
     # interop
-    def to_numpy(self, writable: bool, allow_copy: bool) -> Any: ...
+    def to_numpy(self, writable: bool, allow_copy: bool) -> NDArray1D: ...
     def to_numpy_view(self) -> Any | None: ...
     @staticmethod
     def _import_decimal_from_iceberg_binary_repr(
@@ -817,7 +818,7 @@ class PyDataFrame:
         order: IndexOrder,
         writable: bool,
         allow_copy: bool,
-    ) -> Any: ...
+    ) -> NDArray2D: ...
 
 class PyLazyFrame:
     @staticmethod
