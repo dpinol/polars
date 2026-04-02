@@ -1,17 +1,13 @@
 use ndarray::IntoDimension;
-use num_traits::{Float, NumCast};
+use num_traits::{Float, NumCast, Zero};
 use numpy::npyffi::flags;
 use numpy::{Element, PyArray1};
 use polars::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::{IntoPyObjectExt, intern};
-
 use super::to_numpy_df::df_to_numpy;
-use super::utils::{
-    create_borrowed_np_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype,
-    reshape_numpy_array, series_contains_null,
-};
+use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype, reshape_numpy_array, series_contains_null};
 use crate::conversion::ObjectValue;
 use crate::conversion::chunked_array::{decimal_to_pyobject_iter, time_to_pyobject_iter};
 use crate::series::PySeries;
@@ -88,17 +84,11 @@ pub(super) fn series_to_numpy(
 }
 
 /// Wraps an existing numpy array with the
-fn series_to_masked_series(py: Python, np_array: PyObject, s: &Series) -> PyResult<PyObject> {
+fn series_to_masked_series(py: Python, np_array: Py<PyAny>, s: &Series) -> PyResult<Py<PyAny>> {
     let validity_buffer_array = series_validity_buffer_to_numpy(py, s);
-    Python::with_gil(|py| {
-        let masked_array_api = PyModule::import_bound(py, "numpy.ma")?;
-        let ma_constructor = masked_array_api.getattr("array")?;
-        let args = (np_array,);
-        let kwargs = vec![("mask", validity_buffer_array)].into_py_dict_bound(py);
-        let masked_array = ma_constructor.call(args, Some(&kwargs))?;
-        Ok(masked_array.into_py(py))
-    })
+    create_masked_array(np_array, validity_buffer_array)
 }
+
 /// Create a NumPy view of the given Series.
 fn try_series_to_numpy_view(
     py: Python<'_>,
@@ -215,25 +205,25 @@ fn array_series_to_numpy_view(py: Python<'_>, s: &Series, writable: bool) -> Py<
 fn series_to_numpy_with_copy(py: Python<'_>, s: &Series, writable: bool, masked: bool) -> Py<PyAny> {
     use DataType::*;
     match s.dtype() {
-        Int8 => numeric_series_to_numpy::<Int8Type, f32>(py, s),
-        Int16 => numeric_series_to_numpy::<Int16Type, f32>(py, s),
-        Int32 => numeric_series_to_numpy::<Int32Type, f64>(py, s),
-        Int64 => numeric_series_to_numpy::<Int64Type, f64>(py, s),
+        Int8 => numeric_series_to_numpy::<Int8Type, f32>(py, s, masked),
+        Int16 => numeric_series_to_numpy::<Int16Type, f32>(py, s, masked),
+        Int32 => numeric_series_to_numpy::<Int32Type, f64>(py, s, masked),
+        Int64 => numeric_series_to_numpy::<Int64Type, f64>(py, s, masked),
         Int128 => {
             let s = s.cast(&DataType::Float64).unwrap();
-            series_to_numpy(py, &s, writable, true).unwrap()
+            series_to_numpy(py, &s, writable, true, masked).unwrap()
         },
-        UInt8 => numeric_series_to_numpy::<UInt8Type, f32>(py, s),
-        UInt16 => numeric_series_to_numpy::<UInt16Type, f32>(py, s),
-        UInt32 => numeric_series_to_numpy::<UInt32Type, f64>(py, s),
-        UInt64 => numeric_series_to_numpy::<UInt64Type, f64>(py, s),
+        UInt8 => numeric_series_to_numpy::<UInt8Type, f32>(py, s, masked),
+        UInt16 => numeric_series_to_numpy::<UInt16Type, f32>(py, s, masked),
+        UInt32 => numeric_series_to_numpy::<UInt32Type, f64>(py, s, masked),
+        UInt64 => numeric_series_to_numpy::<UInt64Type, f64>(py, s, masked),
         UInt128 => {
             let s = s.cast(&DataType::Float64).unwrap();
-            series_to_numpy(py, &s, writable, true).unwrap()
+            series_to_numpy(py, &s, writable, true, masked).unwrap()
         },
-        Float16 => numeric_series_to_numpy::<Float16Type, pf16>(py, s),
-        Float32 => numeric_series_to_numpy::<Float32Type, f32>(py, s),
-        Float64 => numeric_series_to_numpy::<Float64Type, f64>(py, s),
+        Float16 => numeric_series_to_numpy::<Float16Type, pf16>(py, s, masked),
+        Float32 => numeric_series_to_numpy::<Float32Type, f32>(py, s, masked),
+        Float64 => numeric_series_to_numpy::<Float64Type, f64>(py, s, masked),
         Boolean => boolean_series_to_numpy(py, s, masked),
         Date => date_series_to_numpy(py, s),
         Datetime(tu, _) => {
@@ -293,12 +283,12 @@ fn series_to_numpy_with_copy(py: Python<'_>, s: &Series, writable: bool, masked:
                 .map(|v| v.into_py_any(py).unwrap());
             PyArray1::from_iter(py, values).into_py_any(py).unwrap()
         },
-        List(_) => list_series_to_numpy(py, s, writable),
+        List(_) => list_series_to_numpy(py, s, writable, masked),
         Array(_, _) => array_series_to_numpy(py, s, writable, masked),
         Struct(_) => {
             let ca = s.struct_().unwrap();
             let df = ca.clone().unnest();
-            df_to_numpy(py, &df, IndexOrder::Fortran, writable, true).unwrap()
+            df_to_numpy(py, &df, IndexOrder::Fortran, writable, true, masked).unwrap()
         },
         #[cfg(feature = "object")]
         Object(_) => {
@@ -314,51 +304,99 @@ fn series_to_numpy_with_copy(py: Python<'_>, s: &Series, writable: bool, masked:
             let values = std::iter::repeat_n(f32::NAN, n);
             PyArray1::from_iter(py, values).into_py_any(py).unwrap()
         },
-        Extension(_, _) => series_to_numpy_with_copy(py, s.ext().unwrap().storage(), writable),
+        Extension(_, _) => series_to_numpy_with_copy(py, s.ext().unwrap().storage(), writable, masked),
         Unknown(_) | BinaryOffset => unreachable!(),
     }
 }
 
 /// Produce a python array from the validity buffer of the series
-fn series_validity_buffer_to_numpy(py: Python, s: &Series) -> PyObject {
-    let validity_buf: Vec<u8> = s
+pub(super) fn series_validity_buffer_to_numpy(py: Python, s: &Series) -> Py<PyAny> {
+    if !s.has_nulls() {
+        let masked_array_api = PyModule::import(py, "numpy.ma").unwrap();
+        let nomask = masked_array_api.getattr("nomask").unwrap();
+        return nomask.into_py_any(py).unwrap();
+    }
+    let validity_buf = s
         .chunks()
         .iter()
         .flat_map(|x| {
             let validity = x.validity();
             match validity {
-                Some(mask) => mask.iter().collect(),
+                Some(mask) => mask.iter().map(|x| !x).collect(),
                 None => vec![false; x.len()],
             }
         })
-        .map(|x| x as u8)
-        .collect();
+        .map(|x| x as u8);
+        //.collect();
 
-    PyArray1::from_iter_bound(py, validity_buf).into_py(py)
+    PyArray1::from_iter(py, validity_buf).into_py_any(py).unwrap()
 }
 
 /// Convert numeric types to f32 or f64 with NaN representing a null value.
-fn numeric_series_to_numpy<T, U>(py: Python<'_>, s: &Series) -> Py<PyAny>
+fn numeric_series_to_numpy<T, U>(py: Python<'_>, s: &Series, masked: bool) -> Py<PyAny>
 where
     T: PolarsNumericType,
     T::Native: numpy::Element,
     U: Float + numpy::Element,
 {
     let ca: &ChunkedArray<T> = s.as_ref().as_ref();
-    if s.null_count() == 0 {
+    // let fill_value = np_ma_fill_value(py, *s.dtype());
+    let null_count = s.null_count();
+    if null_count == 0 {
         let values = ca.into_no_null_iter();
         PyArray1::<T::Native>::from_iter(py, values)
             .into_py_any(py)
             .unwrap()
     } else {
-        let mapper = |opt_v: Option<T::Native>| match opt_v {
-            Some(v) => NumCast::from(v).unwrap(),
-            None => U::nan(),
-        };
-        let values = ca.iter().map(mapper);
-        PyArray1::from_iter(py, values).into_py_any(py).unwrap()
+        if masked && s.dtype().is_integer() {
+            let mapper = |opt_v: Option<T::Native>| match opt_v {
+                Some(v) => NumCast::from(v).unwrap(),
+                None => T::Native::zero(),
+            };
+            let values = ca.iter().map(mapper);
+            PyArray1::from_iter(py, values).into_py_any(py).unwrap()
+        } else {
+            let mapper = |opt_v: Option<T::Native>| match opt_v {
+                Some(v) => NumCast::from(v).unwrap(),
+                None => U::nan(),
+            };
+            let values = ca.iter().map(mapper);
+            PyArray1::from_iter(py, values).into_py_any(py).unwrap()
+        }
     }
 }
+
+/// values from default_fill_value function in numpy.ma.core
+// fn np_ma_fill_value(py: Python<'_>, t: DataType) -> &dyn Any {
+//     if t.is_bool() {
+//         &true
+//     } else if t.is_integer() {
+//         return &999999
+//     } else if t.is_float() {
+//         return &1e20
+//     } else if t.is_object() {
+//         return &"?"
+//     } else if t.is_string() {
+//         return &"N/A"
+//     } else {
+//         panic!("unsupported data type {t:?} for np.ma fill value")
+//     }
+// }
+// fn np_ma_fill_value(py: Python<'_>, t: DataType) -> Py<PyAny> {
+//     if t.is_bool() {
+//         PyBool::new(py, true).into()
+//     } else if t.is_integer() {
+//         PyInt::new(py, 999999).into()
+//     } else if t.is_float() {
+//         PyFloat::new(py, 1e20).into()
+//     } else if t.is_object() {
+//         PyString::new(py, "?").into()
+//     } else if t.is_string() {
+//         PyString::new(py, "N/A").into()
+//     } else {
+//         panic!("unsupported data type {t:?} for np.ma fill value")
+//     }
+// }
 
 /// Convert booleans to u8 if no nulls are present, otherwise convert to objects.
 fn boolean_series_to_numpy(py: Python<'_>, s: &Series, masked: bool) -> Py<PyAny> {
@@ -414,15 +452,14 @@ where
         .into_py_any(py)
         .unwrap()
 }
-fn list_series_to_numpy(py: Python<'_>, s: &Series, writable: bool) -> Py<PyAny> {
-    let ca = s.list().unwrap();
-    let s_inner = ca.get_inner();
 
-    let np_array_flat = series_to_numpy(py, &s_inner, writable, true, false).unwrap();
+fn list_series_to_numpy(py: Python<'_>, s: &Series, writable: bool, masked: bool) -> Py<PyAny> {
+    let ca = s.list().unwrap();
+    //let s_inner = ca.get_inner();
 
     let iter = ca.amortized_iter().map(|opt_s| match opt_s {
         None => py.None(),
-        Some(s) => series_to_numpy(py, s.as_ref(), writable, true).unwrap(),
+        Some(s) => series_to_numpy(py, s.as_ref(), writable, true, masked).unwrap(),
     });
     PyArray1::from_iter(py, iter).into_py_any(py).unwrap()
 }

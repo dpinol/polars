@@ -1,7 +1,9 @@
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, TypeAlias, overload
 
+from numpy.ma import MaskedArray
 import numpy as np
+from typing_extensions import TypeAlias
 
 from polars._typing import ArrowSchemaExportable
 from polars.io.scan_options._options import ScanOptions
@@ -84,6 +86,7 @@ SetOperation: TypeAlias = Literal[
 FloatFmt: TypeAlias = Literal["full", "mixed"]
 NDArray1D: TypeAlias = np.ndarray[tuple[int], np.dtype[np.generic]]
 NDArray2D: TypeAlias = np.ndarray[tuple[int, int], np.dtype[np.generic]]
+ParquetFieldOverwrites: TypeAlias = Any
 StatisticsOptions: TypeAlias = Any
 EngineType: TypeAlias = Literal["auto", "in-memory", "streaming", "gpu"]
 PyScanOptions: TypeAlias = Any
@@ -582,7 +585,9 @@ class PySeries:
     def scatter(self, idx: PySeries, values: PySeries) -> None: ...
 
     # interop
-    def to_numpy(self, writable: bool, allow_copy: bool) -> NDArray1D: ...
+    def to_numpy(
+        self, writable: bool, allow_copy: bool, masked: bool
+    ) -> NDArray1D | MaskedArray: ...
     def to_numpy_view(self) -> Any | None: ...
     @staticmethod
     def _import_decimal_from_iceberg_binary_repr(
@@ -817,7 +822,8 @@ class PyDataFrame:
         order: IndexOrder,
         writable: bool,
         allow_copy: bool,
-    ) -> NDArray2D: ...
+        masked: bool,
+    ) -> NDArray2D | MaskedArray: ...
 
 class PyLazyFrame:
     @staticmethod

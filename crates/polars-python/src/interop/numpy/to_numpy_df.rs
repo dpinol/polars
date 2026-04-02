@@ -1,6 +1,6 @@
 use ndarray::IntoDimension;
 use numpy::npyffi::flags;
-use numpy::{Element, IntoPyArray, PyArray1};
+use numpy::{Element, IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use polars_core::prelude::*;
 use polars_core::utils::dtypes_to_supertype;
 use polars_core::with_match_physical_numeric_polars_type;
@@ -9,10 +9,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple};
 use pyo3::{IntoPyObjectExt, intern};
 
-use super::to_numpy_series::series_to_numpy;
-use super::utils::{
-    create_borrowed_np_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype,
-};
+use super::to_numpy_series::{series_to_numpy};
+use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype};
 use crate::conversion::Wrap;
 use crate::dataframe::PyDataFrame;
 use crate::utils::EnterPolarsExt;
@@ -26,8 +24,9 @@ impl PyDataFrame {
         order: Wrap<IndexOrder>,
         writable: bool,
         allow_copy: bool,
+        masked: bool,
     ) -> PyResult<Py<PyAny>> {
-        df_to_numpy(py, &self.df.read(), order.0, writable, allow_copy)
+        df_to_numpy(py, &self.df.read(), order.0, writable, allow_copy, masked)
     }
 }
 
@@ -37,6 +36,7 @@ pub(super) fn df_to_numpy(
     order: IndexOrder,
     writable: bool,
     allow_copy: bool,
+    masked: bool,
 ) -> PyResult<Py<PyAny>> {
     if df.shape_has_zero() {
         if df.width() == 0 {
@@ -52,7 +52,7 @@ pub(super) fn df_to_numpy(
         }
         // Take this path to ensure a writable array.
         // This does not actually copy data for an empty DataFrame.
-        return df_to_numpy_with_copy(py, df, order, true);
+        return df_to_numpy_with_copy(py, df, order, true, masked);
     }
 
     if matches!(order, IndexOrder::Fortran) {
@@ -65,6 +65,10 @@ pub(super) fn df_to_numpy(
                 }
                 arr = arr.call_method0(py, intern!(py, "copy"))?;
             }
+            if masked {
+                let validity = df_validity_buffer_to_numpy(py, df);
+                return create_masked_array(arr, validity)
+            }
             return Ok(arr);
         }
     }
@@ -75,7 +79,7 @@ pub(super) fn df_to_numpy(
         ));
     }
 
-    df_to_numpy_with_copy(py, df, order, writable)
+    df_to_numpy_with_copy(py, df, order, writable, masked)
 }
 
 /// Create a NumPy view of the given DataFrame.
@@ -241,12 +245,18 @@ fn df_to_numpy_with_copy(
     df: &DataFrame,
     order: IndexOrder,
     writable: bool,
+    masked: bool,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(arr) = try_df_to_numpy_numeric_supertype(py, df, order) {
+    let arr = if let Some(arr) = try_df_to_numpy_numeric_supertype(py, df, order) {
+        if masked {
+            let validity = df_validity_buffer_to_numpy(py, df);
+            return create_masked_array(arr, validity)
+        }
         Ok(arr)
     } else {
-        df_columns_to_numpy(py, df, order, writable)
-    }
+        df_columns_to_numpy(py, df, order, writable, masked)
+    };
+    return arr
 }
 fn try_df_to_numpy_numeric_supertype(
     py: Python<'_>,
@@ -270,9 +280,10 @@ fn df_columns_to_numpy(
     df: &DataFrame,
     order: IndexOrder,
     writable: bool,
+    masked: bool,
 ) -> PyResult<Py<PyAny>> {
-    let np_arrays = df.columns().iter().map(|c| {
-        let mut arr = series_to_numpy(py, c.as_materialized_series(), writable, true, false).unwrap();
+    let np_arrays: Vec<_> = df.columns().iter().map(|c| {
+        let mut arr = series_to_numpy(py, c.as_materialized_series(), writable, true, masked).unwrap();
 
         // Convert multidimensional arrays to 1D object arrays.
         let shape: Vec<usize> = arr
@@ -289,8 +300,20 @@ fn df_columns_to_numpy(
             arr = PyArray1::from_iter(py, subarrays).into_py_any(py).unwrap();
         }
         arr
-    });
+    }).collect();
 
+    let arr = merge_np_arrays(py, order, np_arrays.iter().map(|a|     a.getattr(py, intern!(py, "data")).unwrap()));
+    if masked {
+        let mask = merge_np_arrays(py,order, np_arrays.iter().map(|a|     a.getattr(py, intern!(py, "mask")).unwrap()
+        ));
+        create_masked_array(arr?, mask?)
+    } else {
+        arr
+    }
+
+}
+
+fn merge_np_arrays(py: Python, order: IndexOrder, np_arrays: impl ExactSizeIterator<Item=Py<PyAny>>) -> PyResult<Py<PyAny>> {
     let numpy = super::utils::get_numpy_module(py)?;
     let np_array = match order {
         IndexOrder::C => numpy
@@ -301,6 +324,27 @@ fn df_columns_to_numpy(
             .call1((PyList::new(py, np_arrays)?,))?
             .getattr(intern!(py, "T"))?,
     };
-
     Ok(np_array.into())
 }
+
+/// Produce a python array from the validity buffer of the dataframe.
+fn df_validity_buffer_to_numpy(py: Python, df: &DataFrame) -> Py<PyAny> {
+    let validity = PyArray2::<bool>::zeros(py, (df.width(), df.height()), false);
+    let val_slice = unsafe { validity.as_slice_mut().unwrap() };
+    for (col_idx, col) in df.columns().iter().enumerate() {
+        let s = col.as_materialized_series();
+        if !s.has_nulls() {
+            continue;
+        }
+        for (row_idx, is_null) in s.is_null().iter().enumerate() {
+            if let Some(is_null) = is_null && is_null {
+                val_slice[row_idx * df.width() + col_idx] = true;
+            }
+        }
+    }
+    validity.into_py_any(py).unwrap()
+}
+
+
+
+
