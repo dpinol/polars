@@ -7,7 +7,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::{IntoPyObjectExt, intern};
 use super::to_numpy_df::df_to_numpy;
-use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype, reshape_numpy_array, series_contains_null};
+use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, ma_nomask, polars_dtype_to_np_temporal_dtype, reshape_numpy_array, series_contains_null};
 use crate::conversion::ObjectValue;
 use crate::conversion::chunked_array::{decimal_to_pyobject_iter, time_to_pyobject_iter};
 use crate::series::PySeries;
@@ -312,9 +312,7 @@ fn series_to_numpy_with_copy(py: Python<'_>, s: &Series, writable: bool, masked:
 /// Produce a python array from the validity buffer of the series
 pub(super) fn series_validity_buffer_to_numpy(py: Python, s: &Series) -> Py<PyAny> {
     if !s.has_nulls() {
-        let masked_array_api = PyModule::import(py, "numpy.ma").unwrap();
-        let nomask = masked_array_api.getattr("nomask").unwrap();
-        return nomask.into_py_any(py).unwrap();
+        return ma_nomask(py)
     }
     let validity_buf = s
         .chunks()
@@ -327,7 +325,6 @@ pub(super) fn series_validity_buffer_to_numpy(py: Python, s: &Series) -> Py<PyAn
             }
         })
         .map(|x| x as u8);
-        //.collect();
 
     PyArray1::from_iter(py, validity_buf).into_py_any(py).unwrap()
 }

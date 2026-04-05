@@ -8,9 +8,9 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple};
 use pyo3::{IntoPyObjectExt, intern};
-
+use polars_utils::itertools::Itertools;
 use super::to_numpy_series::{series_to_numpy};
-use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, polars_dtype_to_np_temporal_dtype};
+use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, ma_nomask, polars_dtype_to_np_temporal_dtype};
 use crate::conversion::Wrap;
 use crate::dataframe::PyDataFrame;
 use crate::utils::EnterPolarsExt;
@@ -304,13 +304,32 @@ fn df_columns_to_numpy(
 
     let arr = merge_np_arrays(py, order, np_arrays.iter().map(|a|     a.getattr(py, intern!(py, "data")).unwrap()));
     if masked {
-        let mask = merge_np_arrays(py,order, np_arrays.iter().map(|a|     a.getattr(py, intern!(py, "mask")).unwrap()
-        ));
+        let mask = merge_masks(py, order, np_arrays.iter());
         create_masked_array(arr?, mask?)
     } else {
         arr
     }
 
+}
+
+fn merge_masks<'a>(py: Python, order: IndexOrder, np_arrays: impl ExactSizeIterator<Item=&'a Py<PyAny>>) -> PyResult<Py<PyAny>> {
+    let num_arrays = np_arrays.len();
+    let masks = np_arrays.map(|a| a.getattr(py, intern!(py, "mask")).unwrap()).collect_vec();
+    let are_nomasks: Vec<bool> = masks.iter().map(|m| {
+        let shape = m.bind(py).getattr(intern!(py, "shape")).unwrap();
+        let len: usize = shape.call_method0(intern!(py, "__len__")).unwrap().extract().unwrap();
+        if len == 0 { true } else { false }
+    }).collect_vec();
+    if are_nomasks.iter().all(|n| *n) {
+        return Ok(ma_nomask(py))
+    }
+
+    merge_np_arrays(py,order, masks.into_iter().zip(are_nomasks.into_iter()).map(|(mask, is_nomask)| {
+        if is_nomask {
+            return PyArray1::from_iter(py, 0..num_arrays).into_py_any(py).unwrap();
+        }
+        mask
+    }))
 }
 
 fn merge_np_arrays(py: Python, order: IndexOrder, np_arrays: impl ExactSizeIterator<Item=Py<PyAny>>) -> PyResult<Py<PyAny>> {

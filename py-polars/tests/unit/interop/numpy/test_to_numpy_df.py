@@ -61,17 +61,52 @@ def test_df_to_masked_numeric_supertype() -> None:
     )
 
 
+def test_df_to_masked_null_free_column() -> None:
+    # Bug 1: df_columns_to_numpy calls series_validity_buffer_to_numpy per column.
+    # For null-free columns it returns numpy.ma.nomask (the Python constant False).
+    # The code then stacks all per-column masks with np.column_stack, but
+    # np.column_stack([False, array([True, False, False])]) raises ValueError because
+    # the scalar False is treated as shape (1,1) while the mask array has shape (3,1).
+    df = pl.DataFrame({"a": [1, 2, 3], "b": [None, "x", "y"]})  # "a" has no nulls
+    a= ma.nomask.shape
+    result = df.to_numpy(masked=True)
+    strict_assert_ma_equal(
+        result,
+        ma.MaskedArray(
+            [[1, None], [2, "x"], [3, "y"]],
+            [[False, True], [False, False], [False, False]],
+            np.object_,
+        ),
+    )
+
+
+def test_df_to_masked_null_free_column_multi() -> None:
+    # Bug 2: same nomask bug, reproduced with three columns where the null-free one sits
+    # between two nullable columns.  The mixed types ensure df_columns_to_numpy is taken
+    # (no numeric supertype), so the scalar-vs-array mismatch in column_stack fires.
+    df = pl.DataFrame({"a": [None, 2, 3], "b": [1, 2, 3], "c": ["x", "y", None]})
+    result = df.to_numpy(masked=True)
+    strict_assert_ma_equal(
+        result,
+        ma.MaskedArray(
+            [[None, 1, "x"], [2, 2, "y"], [3, 3, None]],
+            [[True, False, False], [False, False, False], [False, False, True]],
+            np.object_,
+        ),
+    )
+
+
 def test_df_to_masked_numpy() -> None:
     df = pl.DataFrame(
-        {"a": [1, None, 2], "b": [None, "3", "4"]}
+        {"a": [1, None, 2], "b": [None, "3", "4"], "c": [[5], [6], None], "d": [{"d1":2}, None, None]}
     )
 
     result = df.to_numpy(masked=True)
     strict_assert_ma_equal(
         result,
         ma.MaskedArray(
-            [[1, None], [0, "3"], [2, "4"]],
-            [[False, True], [True, False], [False, False]],
+            [[1, None, [5]], [0, "3", [6]], [2, "4", None]],
+            [[False, True, False], [True, False, False], [False, False, True]],
             np.object_,
         ),
     )

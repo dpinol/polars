@@ -4914,7 +4914,7 @@ class Series:
         allow_copy: bool = ...,
         use_pyarrow: bool | None = ...,
         zero_copy_only: bool | None = ...,
-        masked: Literal[True] = True,
+        masked: Literal[True] = ...,
     ) -> np.ma.MaskedArray[Any, Any]: ...
 
     def to_numpy(

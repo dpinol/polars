@@ -7,12 +7,43 @@ use numpy::{Element, PY_ARRAY_API, PyArrayDescr, PyArrayDescrMethods, ToNpyDims,
 use polars_core::prelude::*;
 use pyo3::{intern, IntoPyObjectExt};
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::PyTuple;
 use pyo3::types::{IntoPyDict};
 
+static NUMPY: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
 
-pub(super) fn get_numpy_module(py: Python) -> PyResult<Bound<PyModule>> {
-    PyModule::import(py, intern!(py, "numpy"))
+static NUMPY_MA: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+
+
+
+pub(super) fn get_numpy_module_ori(py: Python) -> PyResult<Bound<PyModule>> {
+     PyModule::import(py, intern!(py, "numpy"))
+}
+
+static MY_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+
+fn get_module(py: Python<'_>) -> PyResult<&Py<PyModule>> {
+    MY_MODULE.get_or_try_init(py, || {
+        Ok(py.import("some.module")?.unbind())
+    })
+}
+
+
+pub(super) fn get_numpy_module(py: Python) -> PyResult<&Bound<PyModule>>  {
+    let np: PyResult<&Py<PyModule>>   = NUMPY.get_or_try_init(py, || Ok(py.import("numpy")?.unbind()));
+    Ok(np?.bind(py))
+}
+
+pub(super) fn get_numpy_ma_module(py: Python) -> PyResult<&Bound<PyModule>> {
+    let np: PyResult<&Py<PyModule>>   = NUMPY_MA.get_or_try_init(py, || Ok(py.import("numpy.ma")?.unbind()));
+    Ok(np?.bind(py))
+}
+
+pub(super) fn ma_nomask(py: Python)  -> Py<PyAny> {
+    let masked_array_api = get_numpy_ma_module(py).unwrap();
+    let nomask = masked_array_api.getattr("nomask").unwrap();
+    nomask.into_py_any(py).unwrap()
 }
 
 /// Create a NumPy ndarray view of the data.
