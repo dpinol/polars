@@ -503,6 +503,28 @@ fn to_graph_rec<'a>(
             )
         },
 
+        #[cfg(any(
+            feature = "dtype-date",
+            feature = "dtype-datetime",
+            feature = "dtype-time"
+        ))]
+        StrptimeInfer {
+            input,
+            dtype,
+            options,
+            ambiguous_is_raise,
+        } => {
+            let input_key = to_graph_rec(input.node, ctx)?;
+            ctx.graph.add_node(
+                nodes::strptime_infer::StrptimeInferNode::new(
+                    dtype.clone(),
+                    options.clone(),
+                    *ambiguous_is_raise,
+                ),
+                [(input_key, input.port)],
+            )
+        },
+
         Map {
             input,
             map,
