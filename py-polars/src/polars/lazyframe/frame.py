@@ -9208,7 +9208,7 @@ naive plan: (run LazyFrame.explain(optimized=True) to see the optimized plan)
     @unstable()
     def remote(
         self,
-        context: pc.ComputeContext | None = None,
+        context: pc.ClientContext | None = None,
         *,
         plan_type: pc._typing.PlanTypePreference = "dot",
         n_retries: int = 0,
@@ -9279,7 +9279,7 @@ naive plan: (run LazyFrame.explain(optimized=True) to see the optimized plan)
         """
         return pc.LazyFrameRemote(
             lf=self,
-            context=context,
+            context=context,  # type: ignore[arg-type]
             plan_type=plan_type,
             n_retries=n_retries,
             engine=engine,
