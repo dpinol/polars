@@ -3330,13 +3330,14 @@ name = "polars-ooc"
 version = "0.53.0"
 dependencies = [
  "boxcar",
+ "libc",
  "mimalloc",
- "parking_lot",
  "polars-config",
  "polars-core",
+ "polars-io",
  "polars-utils",
- "slotmap",
  "tikv-jemallocator",
+ "tokio",
 ]
 
 [[package]]
