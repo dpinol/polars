@@ -83,6 +83,9 @@ pub fn arg_sort_by(
     )
     .into()
 }
+fn ff() {
+    let a = Vec<u8>();
+}
 #[pyfunction]
 pub fn arg_where(condition: PyExpr) -> PyExpr {
     dsl::arg_where(condition.inner).into()

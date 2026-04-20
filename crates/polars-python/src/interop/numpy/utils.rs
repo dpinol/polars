@@ -21,21 +21,13 @@ pub(super) fn get_numpy_module_ori(py: Python) -> PyResult<Bound<PyModule>> {
      PyModule::import(py, intern!(py, "numpy"))
 }
 
-static MY_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
 
-fn get_module(py: Python<'_>) -> PyResult<&Py<PyModule>> {
-    MY_MODULE.get_or_try_init(py, || {
-        Ok(py.import("some.module")?.unbind())
-    })
-}
-
-
-pub(super) fn get_numpy_module(py: Python) -> PyResult<&Bound<PyModule>>  {
+pub(super) fn get_numpy_module(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>>  {
     let np: PyResult<&Py<PyModule>>   = NUMPY.get_or_try_init(py, || Ok(py.import("numpy")?.unbind()));
     Ok(np?.bind(py))
 }
 
-pub(super) fn get_numpy_ma_module(py: Python) -> PyResult<&Bound<PyModule>> {
+pub(super) fn get_numpy_ma_module(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     let np: PyResult<&Py<PyModule>>   = NUMPY_MA.get_or_try_init(py, || Ok(py.import("numpy.ma")?.unbind()));
     Ok(np?.bind(py))
 }

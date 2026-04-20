@@ -8,7 +8,6 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple};
 use pyo3::{IntoPyObjectExt, intern};
-use polars_utils::itertools::Itertools;
 use super::to_numpy_series::{series_to_numpy};
 use super::utils::{create_borrowed_np_array, create_masked_array, dtype_supports_view, ma_nomask, polars_dtype_to_np_temporal_dtype};
 use crate::conversion::Wrap;
@@ -282,15 +281,17 @@ fn df_columns_to_numpy(
     writable: bool,
     masked: bool,
 ) -> PyResult<Py<PyAny>> {
+
     let np_arrays: Vec<_> = df.columns().iter().map(|c| {
         let mut arr = series_to_numpy(py, c.as_materialized_series(), writable, true, masked).unwrap();
 
         // Convert multidimensional arrays to 1D object arrays.
-        let shape: Vec<usize> = arr
-            .getattr(py, intern!(py, "shape"))
-            .unwrap()
-            .extract(py)
-            .unwrap();
+        // let shape: Vec<usize> = arr
+        //     .getattr(py, intern!(py, "shape"))
+        //     .unwrap()
+        //     .extract(py)
+        //     .unwrap();
+        let shape = series_shape(py, &arr);
         if shape.len() > 1 {
             // TODO: Downcast the NumPy array to Rust and split without calling into Python.
             let subarrays = (0..shape[0]).map(|idx| {
@@ -302,9 +303,11 @@ fn df_columns_to_numpy(
         arr
     }).collect();
 
+    let series_len = series_shape(py,&np_arrays[0])[0];
+
     let arr = merge_np_arrays(py, order, np_arrays.iter().map(|a|     a.getattr(py, intern!(py, "data")).unwrap()));
     if masked {
-        let mask = merge_masks(py, order, np_arrays.iter());
+        let mask = merge_masks(py, order, &np_arrays, series_len);
         create_masked_array(arr?, mask?)
     } else {
         arr
@@ -312,23 +315,35 @@ fn df_columns_to_numpy(
 
 }
 
-fn merge_masks<'a>(py: Python, order: IndexOrder, np_arrays: impl ExactSizeIterator<Item=&'a Py<PyAny>>) -> PyResult<Py<PyAny>> {
-    let num_arrays = np_arrays.len();
-    let masks = np_arrays.map(|a| a.getattr(py, intern!(py, "mask")).unwrap()).collect_vec();
-    let are_nomasks: Vec<bool> = masks.iter().map(|m| {
-        let shape = m.bind(py).getattr(intern!(py, "shape")).unwrap();
-        let len: usize = shape.call_method0(intern!(py, "__len__")).unwrap().extract().unwrap();
-        if len == 0 { true } else { false }
-    }).collect_vec();
-    if are_nomasks.iter().all(|n| *n) {
-        return Ok(ma_nomask(py))
+fn merge_masks(py: Python, order: IndexOrder, np_arrays: &[Py<PyAny>], series_len: usize) -> PyResult<Py<PyAny>> {
+    let get_mask = |a: &Py<PyAny>| a.getattr(py, intern!(py, "mask")).unwrap();
+
+    let is_nomask = |m: &Py<PyAny>| -> bool {
+        dbg!(&m);
+        let shape = m.bind(py)
+            .getattr(intern!(py, "shape"))
+            .unwrap();
+        dbg!(&shape);
+        let len = shape.call_method0(intern!(py, "__len__"))
+            .unwrap()
+            .extract::<usize>()
+            .unwrap();
+        dbg!(&len);
+        len == 0
+    };
+
+    if np_arrays.iter().all(|a| is_nomask(&get_mask(a))) {
+        return Ok(ma_nomask(py));
     }
 
-    merge_np_arrays(py,order, masks.into_iter().zip(are_nomasks.into_iter()).map(|(mask, is_nomask)| {
-        if is_nomask {
-            return PyArray1::from_iter(py, 0..num_arrays).into_py_any(py).unwrap();
+    merge_np_arrays(py, order, np_arrays.iter().map(|a| {
+        let mask = get_mask(a);
+        if is_nomask(&mask) {
+            Vec<bool>::repeat(true, series_len).into_py_any(py).unwrap()
+            // PyArray1::from_iter(py, 0..series_len).into_py_any(py).unwrap()
+        } else {
+            mask
         }
-        mask
     }))
 }
 
@@ -363,6 +378,11 @@ fn df_validity_buffer_to_numpy(py: Python, df: &DataFrame) -> Py<PyAny> {
     }
     validity.into_py_any(py).unwrap()
 }
+
+fn series_shape(py: Python, a: &Py<PyAny>) -> Vec<usize> {
+    a.getattr(py, intern!(py, "shape")).unwrap().extract(py).unwrap()
+}
+
 
 
 
